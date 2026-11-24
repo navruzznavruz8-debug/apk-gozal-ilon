@@ -1,0 +1,61 @@
+name: Build APK
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Install
+        run: npm install
+      - name: Add Android
+        run: npx cap add android
+      - name: Icons
+        run: npx @capacitor/assets generate --android
+      - name: Signing key
+        run: |
+          mkdir -p signing
+          if [ ! -f signing/studio.keystore ]; then
+            keytool -genkeypair -keystore signing/studio.keystore -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 36500 -dname "CN=APK Studio,O=APK Studio,C=UZ"
+            echo "NEWKEY=1" >> $GITHUB_ENV
+          fi
+      - name: Native patch
+        run: |
+          python3 scripts/patch_android.py || echo "::warning::native patch otkazib yuborildi"
+      - name: Sync
+        run: npx cap sync android
+      - name: Build APK
+        run: |
+          cd android
+          chmod +x gradlew
+          if ! ./gradlew assembleDebug --no-daemon; then
+            echo "::warning::Native patch bilan yigilmadi, oddiy variant sinab koriladi"
+            cd .. && python3 scripts/patch_android.py --restore && cd android
+            ./gradlew assembleDebug --no-daemon
+          fi
+      - name: Save key
+        run: |
+          if [ -n "$NEWKEY" ]; then
+            git config user.name "APK Studio"
+            git config user.email "studio@users.noreply.github.com"
+            git add signing/studio.keystore
+            git commit -m "APK Studio: imzo kaliti" || true
+            git push || true
+          fi
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk "gozal-ilon.apk"
+          gh release create "v${{ github.run_number }}" "gozal-ilon.apk" --title "gozal-ilon v${{ github.run_number }}" --notes "APK Studio bilan yaratildi"
